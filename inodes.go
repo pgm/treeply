@@ -10,7 +10,7 @@ import (
 
 func NewINodes(workDir string, blockSize int) (*INodes, error) {
 	inodes := &INodes{inodeStates: make(map[INode]*INodeState), workDir: workDir,
-		blockSize: uint64(blockSize),
+		blockSize: int64(blockSize),
 		blocks: &Blocks{nextBlockID: 1, blockStates: map[BlockID]*BlockState{},
 			dir: workDir + "/blocks", blockSize: uint64(blockSize)}}
 
@@ -36,6 +36,8 @@ func (i *INodes) getNextINode() INode {
 
 func (i *INodes) CreateLazyDir(parentINode INode, callback *LazyDirectoryCallback) INode {
 	i.lock.Lock()
+	defer i.lock.Unlock()
+
 	inode := i.getNextINode()
 	if parentINode == 0 {
 		// special case: Root is it's own parent
@@ -46,14 +48,14 @@ func (i *INodes) CreateLazyDir(parentINode INode, callback *LazyDirectoryCallbac
 		lazyDirectoryCallback: callback,
 		isDir:                 true,
 		dirEntries:            NewDirEntries(inode, parentINode)}
-	i.lock.Unlock()
 	return inode
 }
 
-func (i *INodes) CreateLazyFile(length uint64, requestCallback RequestCallback) INode {
+func (i *INodes) CreateLazyFile(length int64, requestCallback RequestCallback) INode {
 	blocks := make([]BlockID, (length+i.blockSize-1)/i.blockSize)
 
 	i.lock.Lock()
+	defer i.lock.Unlock()
 	inode := i.getNextINode()
 	i.inodeStates[inode] = &INodeState{
 		refCount:        1,
@@ -61,12 +63,10 @@ func (i *INodes) CreateLazyFile(length uint64, requestCallback RequestCallback) 
 		length:          length,
 		blocks:          blocks,
 		isDir:           false}
-	i.lock.Unlock()
 	return inode
 }
 
-func (i *INodes) UpdateRefCount(inode INode, delta int) int {
-	i.lock.Lock()
+func (i *INodes) updateRefCountWithNoLock(inode INode, delta int) int {
 	inodeState, ok := i.inodeStates[inode]
 	if !ok {
 		panic("no such inode")
@@ -82,6 +82,12 @@ func (i *INodes) UpdateRefCount(inode INode, delta int) int {
 		}
 		delete(i.inodeStates, inode)
 	}
+	return refCount
+}
+
+func (i *INodes) UpdateRefCount(inode INode, delta int) int {
+	i.lock.Lock()
+	refCount := i.updateRefCountWithNoLock(inode, delta)
 	i.lock.Unlock()
 
 	return refCount
@@ -89,6 +95,7 @@ func (i *INodes) UpdateRefCount(inode INode, delta int) int {
 
 func (in *INodes) SetDirEntry(inode INode, name string, _inode INode) {
 	in.lock.Lock()
+	defer in.lock.Unlock()
 
 	inodeState, ok := in.inodeStates[inode]
 	if !ok {
@@ -97,11 +104,11 @@ func (in *INodes) SetDirEntry(inode INode, name string, _inode INode) {
 
 	inodeState.dirEntries.SetEntry(name, _inode)
 
-	in.lock.Unlock()
 }
 
 func (in *INodes) SetDirEntries(inode INode, dirEntries []DirEntry) {
 	in.lock.Lock()
+	defer in.lock.Unlock()
 
 	inodeState, ok := in.inodeStates[inode]
 	if !ok {
@@ -111,11 +118,11 @@ func (in *INodes) SetDirEntries(inode INode, dirEntries []DirEntry) {
 	inodeState.dirEntries.Set(dirEntries)
 	inodeState.isDirPopulated = true
 
-	in.lock.Unlock()
 }
 
 func (in *INodes) SetBlock(inode INode, index int, blockID BlockID) {
 	in.lock.Lock()
+	defer in.lock.Unlock()
 
 	inodeState, ok := in.inodeStates[inode]
 	if !ok {
@@ -129,20 +136,20 @@ func (in *INodes) SetBlock(inode INode, index int, blockID BlockID) {
 
 	inodeState.blocks[index] = blockID
 
-	in.lock.Unlock()
 }
 
-func (in *INodes) GetBlockIDs(inode INode, startIndex uint64, count uint64) []BlockID {
+func (in *INodes) GetBlockIDs(inode INode, startIndex int64, count int64) []BlockID {
 	fmt.Printf("count=%d\n", count)
 	result := make([]BlockID, count)
 	in.lock.Lock()
+	defer in.lock.Unlock()
 
 	inodeState, ok := in.inodeStates[inode]
 	if !ok {
 		panic("no such inode")
 	}
 
-	for i := uint64(0); i < count; i += 1 {
+	for i := int64(0); i < count; i += 1 {
 		blockID := inodeState.blocks[startIndex+i]
 		result[i] = blockID
 		if blockID != UNALLOCATED_BLOCK_ID {
@@ -150,7 +157,6 @@ func (in *INodes) GetBlockIDs(inode INode, startIndex uint64, count uint64) []Bl
 		}
 	}
 
-	in.lock.Unlock()
 	return result
 }
 
@@ -162,34 +168,46 @@ func (inodes *INodes) RequestMissingBlocks(inode INode, blockIndices []int) {
 	requestCallback(inode, blockIndices)
 }
 
+var INVALID_NAME = errors.New("Invalid Name")
 var INVALID_INODE = errors.New("Invalid INode")
 var IS_NOT_DIR = errors.New("INode is not a directory")
 
 func (inodes *INodes) LookupInDirWithErr(dirINode INode, name string) (INode, error) {
+	log.Printf("LookupInDirWithErr start")
 	inodes.lock.Lock()
+	defer inodes.lock.Unlock()
 
+	log.Printf("LookupInDirWithErr p1")
 	inodeState, ok := inodes.inodeStates[dirINode]
 	if !ok {
 		return 0, INVALID_INODE
 	}
 
+	log.Printf("LookupInDirWithErr p2")
 	if !inodeState.isDir {
 		return 0, IS_NOT_DIR
 	}
 
-	if !inodeState.dirEntries.IsPopulated(name) {
+	log.Printf("LookupInDirWithErr p3")
+	if !inodeState.dirEntries.IsPopulated(name) && inodeState.lazyDirectoryCallback != nil && inodeState.lazyDirectoryCallback.RequestDirEntry != nil {
+		log.Printf("LookupInDirWithErr p4")
 		inodes.lock.Unlock()
 		inodeState.lazyDirectoryCallback.RequestDirEntry(dirINode, name)
 		inodes.lock.Lock()
+		if !inodeState.dirEntries.IsPopulated(name) {
+			log.Fatalf("callback did not populate %s", name)
+		}
+	}
+	log.Printf("LookupInDirWithErr p5")
+
+	result, err := inodeState.dirEntries.Lookup(name)
+	if err != nil {
+		return 0, err
 	}
 
-	if !inodeState.dirEntries.IsPopulated(name) {
-		log.Fatalf("callback did not populate %s", name)
-	}
+	inodes.updateRefCountWithNoLock(result, 1)
 
-	result := inodeState.dirEntries.Lookup(name)
-
-	inodes.lock.Unlock()
+	log.Printf("LookupInDirWithErr p6")
 	return result, nil
 }
 
@@ -201,8 +219,9 @@ func (inodes *INodes) LookupInDir(dirINode INode, name string) INode {
 	return inode
 }
 
-func (inodes *INodes) ReadDir(inode INode) []DirEntry {
+func (inodes *INodes) ReadDir(inode INode) []ExtendedDirEntry {
 	inodes.lock.Lock()
+	defer inodes.lock.Unlock()
 
 	inodeState, ok := inodes.inodeStates[inode]
 	if !ok {
@@ -224,16 +243,20 @@ func (inodes *INodes) ReadDir(inode INode) []DirEntry {
 	}
 
 	result := inodeState.dirEntries.Get()
+	for i := range result {
+		dirEntryInodeState := inodes.inodeStates[result[i].INode]
+		result[i].Size = dirEntryInodeState.length
+		result[i].IsDir = dirEntryInodeState.isDir
+	}
 
-	inodes.lock.Unlock()
 	return result
 }
 
 // edge cases: ReadFile longer then file
-func (inodes *INodes) ReadFile(inode INode, offset uint64, buffer []byte) (int, error) {
+func (inodes *INodes) ReadFile(inode INode, offset int64, buffer []byte) (int, error) {
 	startIndex := offset / inodes.blockSize
 	startOffsetWithinBlock := offset % inodes.blockSize
-	endIndex := (offset + uint64(len(buffer)) + inodes.blockSize - 1) / inodes.blockSize
+	endIndex := (offset + int64(len(buffer)) + inodes.blockSize - 1) / inodes.blockSize
 	blockCount := endIndex - startIndex
 
 	blockIDs := inodes.GetBlockIDs(inode, startIndex, blockCount)

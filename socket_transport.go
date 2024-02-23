@@ -16,7 +16,7 @@ func InstallCleanup(socketName string) {
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
-		log.Printf("Received SIGTERM: Removing %s and exiting...")
+		log.Printf("Received SIGTERM: Removing %s and exiting...", socketName)
 		os.Remove(socketName)
 		os.Exit(1)
 	}()
@@ -25,6 +25,11 @@ func InstallCleanup(socketName string) {
 type ReqEnvelope struct {
 	Type    string
 	Payload json.RawMessage
+}
+
+type RespEnvelope struct {
+	Type    string
+	Payload interface{}
 }
 
 type ListDirReq struct {
@@ -69,13 +74,8 @@ type SeekResp struct {
 	Offset int
 }
 
-// type ListDirReq struct {
-// 	Path string
-// }
-
-// type ListDirResp struct {
-// 	Entries []ListDirEntry
-// }
+type DiagReq struct {
+}
 
 type ErrorResp struct {
 	Message string
@@ -87,11 +87,11 @@ type Command struct {
 	Invoke         func(interface{}) (interface{}, error)
 }
 
-func DispatchReq(client *FileClient, j []byte) interface{} {
+func getCommand(client *FileClient, jsonMessage []byte) (*Command, interface{}) {
 	var request ReqEnvelope
-	err := json.Unmarshal(j, &request)
+	err := json.Unmarshal(jsonMessage, &request)
 	if err != nil {
-		log.Fatalln("Unmarshaling %s error:", string(j), err)
+		log.Fatalf("Unmarshaling %s error: %s", string(jsonMessage), err)
 	}
 
 	commands := []Command{
@@ -123,6 +123,14 @@ func DispatchReq(client *FileClient, j []byte) interface{} {
 			func(req interface{}) (interface{}, error) {
 				return client.ListDir(req.(*ListDirReq))
 			}},
+		{"diag",
+			func() interface{} {
+				return new(DiagReq)
+			},
+			func(req interface{}) (interface{}, error) {
+				d := client.GetDiagnostics()
+				return d, err
+			}},
 	}
 
 	for _, command := range commands {
@@ -130,20 +138,27 @@ func DispatchReq(client *FileClient, j []byte) interface{} {
 			req := command.ReqConstructor()
 			err = json.Unmarshal(request.Payload, req)
 			if err != nil {
-				log.Printf("Unmarshal payload %s into %s:", request.Payload, req, err)
-				return nil
+				log.Printf("Unmarshal payload %s into %s: %s", request.Payload, req, err)
+				return nil, nil
 			}
 
-			resp, err := command.Invoke(req)
-			if err != nil {
-				return &ErrorResp{Message: err.Error()}
-			}
-
-			return resp
+			return &command, req
 		}
 	}
-	log.Printf("unknown request: %s", request.Type)
-	return nil
+
+	return nil, nil
+}
+
+func DispatchReq(client *FileClient, j []byte) interface{} {
+
+	command, req := getCommand(client, j)
+
+	resp, err := command.Invoke(req)
+	if err != nil {
+		return &RespEnvelope{Type: "error", Payload: &ErrorResp{Message: err.Error()}}
+	}
+
+	return &RespEnvelope{Type: "result", Payload: resp}
 }
 
 func CreateListener(socketName string, fs *FileService) error {

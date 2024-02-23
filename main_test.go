@@ -69,7 +69,7 @@ func TestLotsOfReadersFuzz(t *testing.T) {
 		}
 	}
 
-	sampleInode := inodes.CreateLazyFile(uint64(sourceLength), requestCallback)
+	sampleInode := inodes.CreateLazyFile(int64(sourceLength), requestCallback)
 
 	var readyToStart sync.WaitGroup
 	var finished sync.WaitGroup
@@ -109,7 +109,7 @@ func TestLotsOfReadersFuzz(t *testing.T) {
 			// perform all reads
 			for _, readParams := range readOff {
 				log.Printf("read %d %d", readParams.offset, readParams.length)
-				n, err := inodes.ReadFile(sampleInode, uint64(readParams.offset), destBuffer[readParams.offset:readParams.offset+readParams.length])
+				n, err := inodes.ReadFile(sampleInode, int64(readParams.offset), destBuffer[readParams.offset:readParams.offset+readParams.length])
 				if err != nil {
 					panic(err)
 				}

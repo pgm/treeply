@@ -11,6 +11,18 @@ type FileService struct {
 	Root   INode
 }
 
+type FileServiceDiagnostics struct {
+	Remote interface{}
+	INodes interface{}
+}
+
+func (f *FileService) GetDiagnostics() *FileServiceDiagnostics {
+	return &FileServiceDiagnostics{
+		Remote: f.Remote.GetDiagnostics(),
+		INodes: f.INodes.GetDiagnostics(),
+	}
+}
+
 func NewFileService(Remote RemoteProvider, WorkDir string, BlockSize int) (*FileService, error) {
 	inodes, err := NewINodes(WorkDir, int(BlockSize))
 	if err != nil {
@@ -61,7 +73,7 @@ func NewFileService(Remote RemoteProvider, WorkDir string, BlockSize int) (*File
 
 	makeRequestDirEntries = func(dirPath string) func(dirInode INode) {
 		_requestDirEntries = func(dirInode INode) {
-			files, err := Remote.GetDirListing(ctx, "")
+			files, err := Remote.GetDirListing(ctx, dirPath)
 			if err != nil {
 				log.Printf("Error in requestDirEntries: %s", err)
 				return
@@ -73,7 +85,7 @@ func NewFileService(Remote RemoteProvider, WorkDir string, BlockSize int) (*File
 				if file.IsDir {
 					inode = fs.INodes.CreateLazyDir(dirInode, &LazyDirectoryCallback{RequestDirEntries: makeRequestDirEntries(dirPath + "/" + file.Name)})
 				} else {
-					inode = fs.INodes.CreateLazyFile(uint64(file.Size), makeRequestCallback(dirPath+"/"+file.Name, file.ETag))
+					inode = fs.INodes.CreateLazyFile(file.Size, makeRequestCallback(dirPath+"/"+file.Name, file.ETag))
 				}
 				dirEntries = append(dirEntries, DirEntry{Name: file.Name, INode: inode})
 			}
@@ -88,7 +100,7 @@ func NewFileService(Remote RemoteProvider, WorkDir string, BlockSize int) (*File
 		return _requestDirEntries
 	}
 
-	fs.Root = fs.INodes.CreateLazyDir(UNALLOCATED_BLOCK_ID, &LazyDirectoryCallback{RequestDirEntries: makeRequestDirEntries("")})
+	fs.Root = fs.INodes.CreateLazyDir(UNALLOCATED_BLOCK_ID, &LazyDirectoryCallback{RequestDirEntries: makeRequestDirEntries(".")})
 
 	return fs, nil
 }

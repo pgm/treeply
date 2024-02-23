@@ -3,6 +3,7 @@ package treeply
 import (
 	"errors"
 	"io"
+	"log"
 	"strings"
 )
 
@@ -14,6 +15,20 @@ type FileClient struct {
 
 	nextFileHandle  int
 	freeFileHandles []int
+}
+
+type FileClientDiagnostics struct {
+	FileService     *FileServiceDiagnostics
+	OpenFiles       int
+	FreeFileHandles int
+}
+
+func (f *FileClient) GetDiagnostics() *FileClientDiagnostics {
+	return &FileClientDiagnostics{
+		FileService:     f.FileService.GetDiagnostics(),
+		OpenFiles:       len(f.FileHandles),
+		FreeFileHandles: len(f.freeFileHandles),
+	}
 }
 
 func NewFileClient(fs *FileService) *FileClient {
@@ -29,27 +44,34 @@ type FileClientDirEntry struct {
 	Name  string
 	Size  int64
 	INode INode
+	IsDir bool
 }
 
 func (fc *FileClient) GetINodeForPath(path string) (INode, error) {
+	log.Printf("GetINodeForPath start")
 	inode := fc.FileService.Root
 	fc.FileService.INodes.UpdateRefCount(inode, 1)
 
+	log.Printf("GetINodeForPath 2")
 	if path == "" {
 		return inode, nil
 	}
 
+	log.Printf("GetINodeForPath 3")
 	components := strings.Split(path, "/")
 	for _, component := range components {
 		var err error
 		prevINode := inode
+		log.Printf("GetINodeForPath 4 %d %s", inode, component)
 		inode, err = fc.FileService.INodes.LookupInDirWithErr(inode, component)
 		fc.FileService.INodes.UpdateRefCount(prevINode, -1)
 		if err != nil {
 			return 0, err
 		}
+		log.Printf("GetINodeForPath 5")
 	}
 
+	log.Printf("GetINodeForPath 6")
 	return inode, nil
 }
 
@@ -59,13 +81,15 @@ func (fc *FileClient) ListDir(req *ListDirReq) (*ListDirResp, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	log.Printf("ListDir p2")
 	// todo fix this to also check for errors
 	dirEntries := fc.FileService.INodes.ReadDir(inode)
 	fc.FileService.INodes.UpdateRefCount(inode, -1)
 
 	fcde := make([]FileClientDirEntry, 0, len(dirEntries))
 	for _, dirEntry := range dirEntries {
-		fcde = append(fcde, FileClientDirEntry{Name: dirEntry.Name, Size: dirEntry.Size, INode: dirEntry.INode})
+		fcde = append(fcde, FileClientDirEntry{Name: dirEntry.Name, Size: dirEntry.Size, INode: dirEntry.INode, IsDir: dirEntry.IsDir})
 	}
 
 	return &ListDirResp{Entries: fcde}, nil
@@ -114,7 +138,7 @@ func (fc *FileClient) Read(req *ReadReq) (*ReadResp, error) {
 	}
 
 	buffer := make([]byte, req.Length)
-	n, err := fc.FileService.INodes.ReadFile(fh.INode, uint64(fh.Offset), buffer)
+	n, err := fc.FileService.INodes.ReadFile(fh.INode, fh.Offset, buffer)
 	if err != nil && err != io.EOF {
 		return nil, err
 	}

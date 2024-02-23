@@ -31,7 +31,7 @@ type LazyDirectoryCallback struct {
 
 type INodeState struct {
 	refCount              int
-	length                uint64
+	length                int64
 	isDir                 bool
 	isDirPopulated        bool
 	blocks                []BlockID
@@ -47,9 +47,44 @@ type INodes struct {
 	inodeStates map[INode]*INodeState
 
 	blocks    *Blocks
-	blockSize uint64
+	blockSize int64
 
 	workDir string
+}
+
+type BlocksDiagnostics struct {
+	BlocksInUse  int
+	FreeBlockIDs int
+	Dir          string
+}
+
+type INodesDiagnostics struct {
+	NextINode   INode
+	FreeINodes  int
+	INodesInUse int
+	Blocks      *BlocksDiagnostics
+	BlockSize   int64
+	WorkDir     string
+}
+
+func (inodes *INodes) GetDiagnostics() interface{} {
+	inodes.lock.Lock()
+	defer inodes.lock.Unlock()
+
+	return &INodesDiagnostics{NextINode: inodes.nextINode,
+		FreeINodes:  len(inodes.freeINodes),
+		INodesInUse: len(inodes.inodeStates),
+		Blocks:      inodes.blocks.GetDiagnostics(),
+		BlockSize:   inodes.blockSize,
+		WorkDir:     inodes.workDir,
+	}
+}
+
+func (b *Blocks) GetDiagnostics() *BlocksDiagnostics {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	return &BlocksDiagnostics{BlocksInUse: len(b.blockStates), FreeBlockIDs: len(b.freeBlockID), Dir: b.dir}
 }
 
 ////////////////////
@@ -63,7 +98,13 @@ type INodes struct {
 type DirEntry struct {
 	Name  string
 	INode INode
+}
+
+type ExtendedDirEntry struct {
+	Name  string
+	INode INode
 	Size  int64
+	IsDir bool
 }
 
 type DirEntries struct {
@@ -81,10 +122,10 @@ func NewDirEntries(inode INode, parentINode INode) *DirEntries {
 	return d
 }
 
-func (d *DirEntries) Get() []DirEntry {
-	result := make([]DirEntry, 0, len(d.byName))
+func (d *DirEntries) Get() []ExtendedDirEntry {
+	result := make([]ExtendedDirEntry, 0, len(d.byName))
 	for name, inode := range d.byName {
-		result = append(result, DirEntry{Name: name, INode: inode})
+		result = append(result, ExtendedDirEntry{Name: name, INode: inode})
 	}
 	return result
 }
@@ -106,6 +147,10 @@ func (d *DirEntries) IsPopulated(name string) bool {
 	return d.populated[name]
 }
 
-func (d *DirEntries) Lookup(name string) INode {
-	return d.byName[name]
+func (d *DirEntries) Lookup(name string) (INode, error) {
+	inode, ok := d.byName[name]
+	if !ok {
+		return 0, INVALID_NAME
+	}
+	return inode, nil
 }

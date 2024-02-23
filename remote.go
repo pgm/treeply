@@ -3,6 +3,7 @@ package treeply
 import (
 	"context"
 	"io"
+	"log"
 	"os"
 	"time"
 )
@@ -17,6 +18,7 @@ type RemoteFile struct {
 type RemoteProvider interface {
 	GetDirListing(ctx context.Context, path string) ([]RemoteFile, error)
 	GetReader(ctx context.Context, path string, ETag string, Offset int64, Length int64) (io.Reader, error)
+	GetDiagnostics() interface{}
 }
 
 type DirRemoteProvider struct {
@@ -25,9 +27,18 @@ type DirRemoteProvider struct {
 	ReadDelay       time.Duration
 }
 
+type DirRemoteProviderDiagnostics struct {
+	Root string
+}
+
+func (d *DirRemoteProvider) GetDiagnostics() interface{} {
+	return &DirRemoteProviderDiagnostics{Root: d.Root}
+}
+
 func (d *DirRemoteProvider) GetDirListing(ctx context.Context, path string) ([]RemoteFile, error) {
 	time.Sleep(d.DirListingDelay)
 
+	log.Printf("GetDirListing(%s)", path)
 	if path == "" {
 		path = d.Root
 	} else {
@@ -38,13 +49,21 @@ func (d *DirRemoteProvider) GetDirListing(ctx context.Context, path string) ([]R
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("ReadDir(%s) -> %s", path, entries)
 	result := make([]RemoteFile, 0, len(entries))
 	for _, entry := range entries {
 		fi, err := entry.Info()
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, RemoteFile{Name: entry.Name(), IsDir: fi.IsDir(), ETag: fi.ModTime().String(), Size: fi.Size()})
+		name := entry.Name()
+		// if fi.IsDir() {
+		// 	if !strings.HasSuffix(name, "/") {
+		// 		log.Fatalf("dir didn't end with /: %s", name)
+		// 	}
+		// 	name = name[:len(name)-1]
+		// }
+		result = append(result, RemoteFile{Name: name, IsDir: fi.IsDir(), ETag: fi.ModTime().String(), Size: fi.Size()})
 	}
 	return result, nil
 }
