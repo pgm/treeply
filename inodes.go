@@ -1,7 +1,6 @@
 package treeply
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -76,6 +75,7 @@ func (i *INodes) updateRefCountWithNoLock(inode INode, delta int) int {
 	if refCount < 0 {
 		panic("refcount < 0")
 	} else if refCount == 0 {
+		log.Printf("inode %d refcount == 0, releasing...", inode)
 		// free inode
 		for _, blockID := range inodeState.blocks {
 			i.blocks.UpdateRefCount(blockID, -1)
@@ -83,6 +83,23 @@ func (i *INodes) updateRefCountWithNoLock(inode INode, delta int) int {
 		delete(i.inodeStates, inode)
 	}
 	return refCount
+}
+
+type INodeStat struct {
+	Size  int64
+	IsDir bool
+}
+
+func (i *INodes) Stat(inode INode) (*INodeStat, error) {
+	i.lock.Lock()
+	defer i.lock.Unlock()
+
+	inodeState, ok := i.inodeStates[inode]
+	if !ok {
+		return nil, INVALID_INODE
+	}
+
+	return &INodeStat{IsDir: inodeState.isDir}, nil
 }
 
 func (i *INodes) UpdateRefCount(inode INode, delta int) int {
@@ -168,10 +185,6 @@ func (inodes *INodes) RequestMissingBlocks(inode INode, blockIndices []int) {
 	requestCallback(inode, blockIndices)
 }
 
-var INVALID_NAME = errors.New("Invalid Name")
-var INVALID_INODE = errors.New("Invalid INode")
-var IS_NOT_DIR = errors.New("INode is not a directory")
-
 func (inodes *INodes) LookupInDirWithErr(dirINode INode, name string) (INode, error) {
 	log.Printf("LookupInDirWithErr start")
 	inodes.lock.Lock()
@@ -205,9 +218,10 @@ func (inodes *INodes) LookupInDirWithErr(dirINode INode, name string) (INode, er
 		return 0, err
 	}
 
-	inodes.updateRefCountWithNoLock(result, 1)
+	refCount := inodes.updateRefCountWithNoLock(result, 1)
 
-	log.Printf("LookupInDirWithErr p6")
+	log.Printf("LookupInDirWithErr: Incremented inode %d inode -> %d", result, refCount)
+
 	return result, nil
 }
 
@@ -219,17 +233,17 @@ func (inodes *INodes) LookupInDir(dirINode INode, name string) INode {
 	return inode
 }
 
-func (inodes *INodes) ReadDir(inode INode) []ExtendedDirEntry {
+func (inodes *INodes) ReadDirWithErr(inode INode) ([]ExtendedDirEntry, error) {
 	inodes.lock.Lock()
 	defer inodes.lock.Unlock()
 
 	inodeState, ok := inodes.inodeStates[inode]
 	if !ok {
-		panic("no such inode")
+		return nil, INVALID_INODE
 	}
 
 	if !inodeState.isDir {
-		panic("not dir")
+		return nil, IS_NOT_DIR
 	}
 
 	// if we're a directory but not populated, use callback to request it be populated
@@ -249,7 +263,48 @@ func (inodes *INodes) ReadDir(inode INode) []ExtendedDirEntry {
 		result[i].IsDir = dirEntryInodeState.isDir
 	}
 
+	return result, nil
+}
+
+func (inodes *INodes) ReadDir(inode INode) []ExtendedDirEntry {
+	result, err := inodes.ReadDirWithErr(inode)
+	if err != nil {
+		panic(err)
+	}
 	return result
+}
+
+func (inodes *INodes) IsDirPopulated(inode INode) bool {
+	inodes.lock.Lock()
+	defer inodes.lock.Unlock()
+
+	inodeState, ok := inodes.inodeStates[inode]
+	if !ok {
+		panic("invalid inode")
+	}
+
+	if !inodeState.isDir {
+		panic("is not dir")
+	}
+
+	// if we're a directory but not populated, use callback to request it be populated
+	return inodeState.isDirPopulated
+}
+
+func (inodes *INodes) IsBlockPopulated(inode INode, blockIndex int) bool {
+	inodes.lock.Lock()
+	defer inodes.lock.Unlock()
+
+	state, ok := inodes.inodeStates[inode]
+	if !ok {
+		panic("invalid inode")
+	}
+
+	if state.isDir {
+		panic("is not dir")
+	}
+
+	return state.blocks[blockIndex] != UNALLOCATED_BLOCK_ID
 }
 
 // edge cases: ReadFile longer then file
@@ -288,7 +343,7 @@ func (inodes *INodes) ReadFile(inode INode, offset int64, buffer []byte) (int, e
 	destOffset := 0
 	for blockIndex, blockID := range blockIDs {
 		if blockID == UNALLOCATED_BLOCK_ID {
-			log.Fatalf("Block index %d was still not populated", blockIndex)
+			log.Panicf("Block index %d was still not populated", blockIndex)
 		}
 		readLength := len(buffer) - destOffset
 		blockLength, err := inodes.blocks.ReadBlock(blockID, int64(startOffsetWithinBlock), buffer[destOffset:destOffset+readLength])

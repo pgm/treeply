@@ -1,7 +1,6 @@
 package treeply
 
 import (
-	"errors"
 	"io"
 	"log"
 	"strings"
@@ -48,11 +47,10 @@ type FileClientDirEntry struct {
 }
 
 func (fc *FileClient) GetINodeForPath(path string) (INode, error) {
-	log.Printf("GetINodeForPath start")
 	inode := fc.FileService.Root
-	fc.FileService.INodes.UpdateRefCount(inode, 1)
+	refcount := fc.FileService.INodes.UpdateRefCount(inode, 1)
+	log.Printf("GetINodeForPath start root = %d, incrementing refcount -> %d", inode, refcount)
 
-	log.Printf("GetINodeForPath 2")
 	if path == "" {
 		return inode, nil
 	}
@@ -62,9 +60,9 @@ func (fc *FileClient) GetINodeForPath(path string) (INode, error) {
 	for _, component := range components {
 		var err error
 		prevINode := inode
-		log.Printf("GetINodeForPath 4 %d %s", inode, component)
 		inode, err = fc.FileService.INodes.LookupInDirWithErr(inode, component)
-		fc.FileService.INodes.UpdateRefCount(prevINode, -1)
+		refcount = fc.FileService.INodes.UpdateRefCount(prevINode, -1)
+		log.Printf("GetINodeForPath 4 inode %d (%s) refcount decremented -> %d", inode, component, refcount)
 		if err != nil {
 			return 0, err
 		}
@@ -82,20 +80,22 @@ func (fc *FileClient) ListDir(req *ListDirReq) (*ListDirResp, error) {
 		return nil, err
 	}
 
+	defer fc.FileService.INodes.UpdateRefCount(inode, -1)
+
 	log.Printf("ListDir p2")
-	// todo fix this to also check for errors
-	dirEntries := fc.FileService.INodes.ReadDir(inode)
-	fc.FileService.INodes.UpdateRefCount(inode, -1)
+	dirEntries, err := fc.FileService.INodes.ReadDirWithErr(inode)
+	if err != nil {
+		return nil, err
+	}
 
 	fcde := make([]FileClientDirEntry, 0, len(dirEntries))
 	for _, dirEntry := range dirEntries {
 		fcde = append(fcde, FileClientDirEntry{Name: dirEntry.Name, Size: dirEntry.Size, INode: dirEntry.INode, IsDir: dirEntry.IsDir})
 	}
 
+	log.Printf("ListDir end")
 	return &ListDirResp{Entries: fcde}, nil
 }
-
-var INVALID_HANDLE = errors.New("Invalid handle")
 
 const INVALID_FD = -1
 
@@ -104,7 +104,17 @@ type Response interface{}
 func (fc *FileClient) Open(req *OpenReq) (*OpenResp, error) {
 	inode, err := fc.GetINodeForPath(req.Path)
 	if err != nil {
-		return nil, INVALID_HANDLE
+		return nil, err
+	}
+
+	dirEntry, err := fc.FileService.INodes.Stat(inode)
+	if err != nil {
+		return nil, err
+	}
+
+	if dirEntry.IsDir {
+		fc.FileService.INodes.UpdateRefCount(inode, -1)
+		return nil, IS_DIR
 	}
 
 	var fd int
@@ -127,6 +137,8 @@ func (fc *FileClient) Close(req *CloseReq) (*CloseResp, error) {
 	}
 
 	delete(fc.FileHandles, req.FD)
+	fc.freeFileHandles = append(fc.freeFileHandles, req.FD)
+
 	fc.FileService.INodes.UpdateRefCount(fh.INode, -1)
 	return &CloseResp{}, nil
 }

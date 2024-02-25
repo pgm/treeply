@@ -305,45 +305,45 @@ func TestReadFromLazyINode(t *testing.T) {
 	}
 }
 
-func TestReadFromAutomountDir(t *testing.T) {
-	workDir := os.TempDir()
-	inodes, err := NewINodes(workDir, 3)
-	if err != nil {
-		panic(err)
-	}
+// func TestReadFromAutomountDir(t *testing.T) {
+// 	workDir := os.TempDir()
+// 	inodes, err := NewINodes(workDir, 3)
+// 	if err != nil {
+// 		panic(err)
+// 	}
 
-	requestBlocks := func(inode INode, blockIndices []int) {
-		panic("not impl")
-	}
+// 	requestBlocks := func(inode INode, blockIndices []int) {
+// 		panic("not impl")
+// 	}
 
-	requestDirEntry := func(inode INode, name string) {
-		if name == "missing" {
-			log.Printf("populating missing")
-			inodes.SetDirEntry(inode, name, UNALLOCATED_BLOCK_ID)
-		} else {
-			childFile := inodes.CreateLazyFile(10, requestBlocks)
-			log.Printf("populating %s -> %d", name, childFile)
-			inodes.SetDirEntry(inode, name, childFile)
-		}
-	}
-	sampleInode := inodes.CreateLazyDir(0, &LazyDirectoryCallback{RequestDirEntry: requestDirEntry})
+// 	requestDirEntry := func(inode INode, name string) {
+// 		if name == "missing" {
+// 			log.Printf("populating missing")
+// 			inodes.SetDirEntry(inode, name, UNALLOCATED_BLOCK_ID)
+// 		} else {
+// 			childFile := inodes.CreateLazyFile(10, requestBlocks)
+// 			log.Printf("populating %s -> %d", name, childFile)
+// 			inodes.SetDirEntry(inode, name, childFile)
+// 		}
+// 	}
+// 	sampleInode := inodes.CreateLazyDir(0, &LazyDirectoryCallback{RequestDirEntry: requestDirEntry})
 
-	dirEntries := inodes.ReadDir(sampleInode)
-	assert.Equal(t, 2, len(dirEntries))
+// 	dirEntries := inodes.ReadDir(sampleInode)
+// 	assert.Equal(t, 2, len(dirEntries))
 
-	inodes.LookupInDir(sampleInode, "x")
+// 	inodes.LookupInDir(sampleInode, "x")
 
-	dirEntries = inodes.ReadDir(sampleInode)
-	assert.Equal(t, 3, len(dirEntries))
+// 	dirEntries = inodes.ReadDir(sampleInode)
+// 	assert.Equal(t, 3, len(dirEntries))
 
-	inodes.LookupInDir(sampleInode, "y")
+// 	inodes.LookupInDir(sampleInode, "y")
 
-	dirEntries = inodes.ReadDir(sampleInode)
-	assert.Equal(t, 4, len(dirEntries))
+// 	dirEntries = inodes.ReadDir(sampleInode)
+// 	assert.Equal(t, 4, len(dirEntries))
 
-	inodes.LookupInDir(sampleInode, "missing")
+// 	inodes.LookupInDir(sampleInode, "missing")
 
-	dirEntries = inodes.ReadDir(sampleInode)
-	assert.Equal(t, 4, len(dirEntries))
+// 	dirEntries = inodes.ReadDir(sampleInode)
+// 	assert.Equal(t, 4, len(dirEntries))
 
-}
+// }

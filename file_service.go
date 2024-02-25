@@ -2,24 +2,32 @@ package treeply
 
 import (
 	"context"
+	"io"
 	"log"
 )
 
 type FileService struct {
-	Remote RemoteProvider
-	INodes *INodes
-	Root   INode
+	Remote               RemoteProvider
+	INodes               *INodes
+	Root                 INode
+	TransferServiceQueue chan interface{}
 }
 
 type FileServiceDiagnostics struct {
-	Remote interface{}
-	INodes interface{}
+	Remote                interface{}
+	INodes                interface{}
+	TransferServiceStatus interface{}
 }
 
 func (f *FileService) GetDiagnostics() *FileServiceDiagnostics {
+	response := make(chan *TransferServiceStatus)
+	f.TransferServiceQueue <- &DiagnosticRequest{Response: response}
+	transferServiceStatus := <-response
+
 	return &FileServiceDiagnostics{
-		Remote: f.Remote.GetDiagnostics(),
-		INodes: f.INodes.GetDiagnostics(),
+		Remote:                f.Remote.GetDiagnostics(),
+		INodes:                f.INodes.GetDiagnostics(),
+		TransferServiceStatus: transferServiceStatus,
 	}
 }
 
@@ -29,9 +37,10 @@ func NewFileService(Remote RemoteProvider, WorkDir string, BlockSize int) (*File
 		return nil, err
 	}
 
-	fs := &FileService{Remote: Remote, INodes: inodes}
+	transferServiceQueue := make(chan interface{})
+	fs := &FileService{Remote: Remote, INodes: inodes, TransferServiceQueue: transferServiceQueue}
 
-	ctx := context.Background()
+	go TransferService(transferServiceQueue, inodes)
 
 	// TODO: These implementations cause a fetch to always happen. This means
 	// that there's race conditions that can happen (ie: two threads ask for
@@ -42,27 +51,33 @@ func NewFileService(Remote RemoteProvider, WorkDir string, BlockSize int) (*File
 
 	makeRequestCallback := func(path string, etag string) RequestCallback {
 		requestCallback := func(inode INode, blockIndices []int) {
-			completions := make(chan *BlockCompletion)
+			Responses := make([]chan error, 0, len(blockIndices))
 
-			go (func() {
-				for _, blockIndex := range blockIndices {
-					reader, err := Remote.GetReader(ctx, path, etag, int64(blockIndex)*int64(BlockSize), int64(BlockSize))
-					if err != nil {
-						log.Printf("Error in requestDirEntries: %s", err)
-						return
-					}
-					readChunkSize := 1000
-					Transfer(ctx, inode, BlockSize, blockIndex, WorkDir, completions, reader, readChunkSize)
+			log.Printf("Requesting %d blocks", len(blockIndices))
+			for _, blockIndex := range blockIndices {
+				Response := make(chan error)
+				Responses = append(Responses, Response)
+
+				offset := int64(blockIndex) * int64(BlockSize)
+				length := int64(BlockSize)
+
+				transferServiceQueue <- &BlockRequest{Block: INodeBlock{INode: inode, BlockIndex: blockIndex},
+					GetReader: func(ctx context.Context) (io.Reader, error) {
+						return Remote.GetReader(ctx, path, etag, offset, length)
+					}, WorkDir: WorkDir, Response: Response,
 				}
-				close(completions)
-			})()
-
-			for completion := range completions {
-				blockID := inodes.blocks.Allocate(completion.Filename)
-				log.Printf("mapping %s to block %d", completion.Filename, blockID)
-				inodes.SetBlock(completion.INode, completion.BlockIndex, blockID)
 			}
 
+			// block waiting for all responses to come in
+			log.Printf("Waiting for completion of %d blocks", len(blockIndices))
+			for _, response := range Responses {
+				value, ok := <-response
+				if ok {
+					log.Printf("Ok")
+				}
+				log.Printf("Got response: %s", value)
+			}
+			log.Printf("Received completion for completion of %d blocks", len(blockIndices))
 		}
 		return requestCallback
 	}
@@ -73,29 +88,19 @@ func NewFileService(Remote RemoteProvider, WorkDir string, BlockSize int) (*File
 
 	makeRequestDirEntries = func(dirPath string) func(dirInode INode) {
 		_requestDirEntries = func(dirInode INode) {
-			files, err := Remote.GetDirListing(ctx, dirPath)
-			if err != nil {
-				log.Printf("Error in requestDirEntries: %s", err)
-				return
+			Response := make(chan error)
+
+			transferServiceQueue <- &GetDirRequest{
+				GetDirListing:          func(ctx context.Context) ([]RemoteFile, error) { return Remote.GetDirListing(ctx, dirPath) },
+				DirINode:               dirInode,
+				MakeDirEntriesCallback: func(childName string) func(INode) { return makeRequestDirEntries(dirPath + "/" + childName) },
+				MakeFileCallback:       func(path string, etag string) RequestCallback { return makeRequestCallback(dirPath+"/"+path, etag) },
+				Response:               Response,
 			}
 
-			dirEntries := make([]DirEntry, 0, len(files))
-			for _, file := range files {
-				var inode INode
-				if file.IsDir {
-					inode = fs.INodes.CreateLazyDir(dirInode, &LazyDirectoryCallback{RequestDirEntries: makeRequestDirEntries(dirPath + "/" + file.Name)})
-				} else {
-					inode = fs.INodes.CreateLazyFile(file.Size, makeRequestCallback(dirPath+"/"+file.Name, file.ETag))
-				}
-				dirEntries = append(dirEntries, DirEntry{Name: file.Name, INode: inode})
-			}
-
-			fs.INodes.SetDirEntries(dirInode, dirEntries)
+			// wait for response before returning
+			<-Response
 		}
-
-		// requestDirEntries := func(dirInode INode) {
-		// 	go _requestDirEntries(dirInode)
-		// }
 
 		return _requestDirEntries
 	}

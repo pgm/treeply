@@ -1,6 +1,7 @@
 package treeply
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -52,6 +53,7 @@ func TestWithDirRemote(t *testing.T) {
 		panic(err)
 	}
 
+	log.Printf("checkpoint1")
 	dirEntries := fs.INodes.ReadDir(fs.Root)
 
 	filenames := make([]string, 0, len(dirEntries))
@@ -62,13 +64,18 @@ func TestWithDirRemote(t *testing.T) {
 
 	assert.Equal(t, []string{".", "..", "d1", "f1", "f2"}, filenames)
 
+	log.Printf("checkpoint2")
 	fileINode := fs.INodes.LookupInDir(fs.Root, "f1")
 	assert.NotEqual(t, UNALLOCATED_BLOCK_ID, fileINode)
+
+	log.Printf("checkpoint4")
 	buffer := make([]byte, 4)
 	n, err := fs.INodes.ReadFile(fileINode, 0, buffer)
 	assert.Equal(t, nil, err)
 	assert.Equal(t, 4, n)
 	assert.Equal(t, "f1f1", string(buffer))
+
+	log.Printf("checkpoint3")
 
 	//    )  ._, mmeeoowwrr!
 	//   (___)''
