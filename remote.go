@@ -2,6 +2,7 @@ package treeply
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -35,6 +36,10 @@ func (d *DirRemoteProvider) GetDiagnostics() interface{} {
 	return &DirRemoteProviderDiagnostics{Root: d.Root}
 }
 
+func getLocalFileFakeEtag(fi os.FileInfo) string {
+	return fmt.Sprintf("%d %s", fi.Size(), fi.ModTime().String())
+}
+
 func (d *DirRemoteProvider) GetDirListing(ctx context.Context, path string) ([]RemoteFile, error) {
 	time.Sleep(d.DirListingDelay)
 
@@ -63,7 +68,7 @@ func (d *DirRemoteProvider) GetDirListing(ctx context.Context, path string) ([]R
 		// 	}
 		// 	name = name[:len(name)-1]
 		// }
-		result = append(result, RemoteFile{Name: name, IsDir: fi.IsDir(), ETag: fi.ModTime().String(), Size: fi.Size()})
+		result = append(result, RemoteFile{Name: name, IsDir: fi.IsDir(), ETag: getLocalFileFakeEtag(fi), Size: fi.Size()})
 	}
 	return result, nil
 }
@@ -99,6 +104,19 @@ func (d *DirRemoteProvider) GetReader(ctx context.Context, path string, ETag str
 		path = d.Root
 	} else {
 		path = d.Root + "/" + path
+	}
+
+	fi, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nil, FILE_CHANGED
+	}
+	if err != nil {
+		return nil, err
+	}
+	curEtag := getLocalFileFakeEtag(fi)
+
+	if curEtag != ETag {
+		return nil, FILE_CHANGED
 	}
 
 	f, err := os.Open(path)

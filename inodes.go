@@ -33,6 +33,32 @@ func (i *INodes) getNextINode() INode {
 	return inode
 }
 
+func (i *INodes) CloneINodeDir(inode INode) (INode, error) {
+	i.lock.Lock()
+	defer i.lock.Unlock()
+
+	oldstate, ok := i.inodeStates[inode]
+	if !ok {
+		return 0, INVALID_INODE
+	}
+
+	newinode := i.getNextINode()
+	parentINode, err := oldstate.dirEntries.Lookup("..")
+	if err != nil {
+		return 0, err
+	}
+	if parentINode == inode {
+		// special case: Root is it's own parent
+		parentINode = newinode
+	}
+	i.inodeStates[newinode] = &INodeState{
+		refCount:              1,
+		lazyDirectoryCallback: oldstate.lazyDirectoryCallback,
+		isDir:                 oldstate.isDir,
+		dirEntries:            NewDirEntries(newinode, parentINode)}
+	return newinode, nil
+}
+
 func (i *INodes) CreateLazyDir(parentINode INode, callback *LazyDirectoryCallback) INode {
 	i.lock.Lock()
 	defer i.lock.Unlock()
@@ -306,6 +332,29 @@ func (inodes *INodes) IsBlockPopulated(inode INode, blockIndex int) bool {
 
 	return state.blocks[blockIndex] != UNALLOCATED_BLOCK_ID
 }
+
+// func (inodes *INodes) Forget(inode INode) error {
+// 	parentDir, err := inodes.LookupInDirWithErr(inode, "..")
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	inodes.lock.Lock()
+// 	defer inodes.lock.Unlock()
+
+// 	state, ok := inodes.inodeStates[inode]
+// 	if !ok {
+// 		return INVALID_INODE
+// 	}
+
+// 	if !state.isDir {
+// 		// only support forgetting a dir at this time because
+// 		// we can only find parent references for dirs
+// 		return IS_NOT_DIR
+// 	}
+
+// 	inodes.c
+// }
 
 // edge cases: ReadFile longer then file
 func (inodes *INodes) ReadFile(inode INode, offset int64, buffer []byte) (int, error) {

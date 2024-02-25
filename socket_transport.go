@@ -77,6 +77,10 @@ type SeekResp struct {
 type DiagReq struct {
 }
 
+type ForgetReq struct {
+	Path string
+}
+
 type ErrorResp struct {
 	Message string
 }
@@ -129,6 +133,14 @@ func getCommand(client *FileClient, jsonMessage []byte) (*Command, interface{}) 
 			},
 			func(req interface{}) (interface{}, error) {
 				d := client.GetDiagnostics()
+				return d, nil
+			}},
+		{"forget",
+			func() interface{} {
+				return new(ForgetReq)
+			},
+			func(req interface{}) (interface{}, error) {
+				d, err := client.Forget(req.(*ForgetReq))
 				return d, err
 			}},
 	}

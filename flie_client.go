@@ -46,9 +46,9 @@ type FileClientDirEntry struct {
 	IsDir bool
 }
 
-func (fc *FileClient) GetINodeForPath(path string) (INode, error) {
-	inode := fc.FileService.Root
-	refcount := fc.FileService.INodes.UpdateRefCount(inode, 1)
+func (f *FileService) GetINodeForPath(path string) (INode, error) {
+	inode := f.Root
+	refcount := f.INodes.UpdateRefCount(inode, 1)
 	log.Printf("GetINodeForPath start root = %d, incrementing refcount -> %d", inode, refcount)
 
 	if path == "" {
@@ -60,8 +60,8 @@ func (fc *FileClient) GetINodeForPath(path string) (INode, error) {
 	for _, component := range components {
 		var err error
 		prevINode := inode
-		inode, err = fc.FileService.INodes.LookupInDirWithErr(inode, component)
-		refcount = fc.FileService.INodes.UpdateRefCount(prevINode, -1)
+		inode, err = f.INodes.LookupInDirWithErr(inode, component)
+		refcount = f.INodes.UpdateRefCount(prevINode, -1)
 		log.Printf("GetINodeForPath 4 inode %d (%s) refcount decremented -> %d", inode, component, refcount)
 		if err != nil {
 			return 0, err
@@ -71,6 +71,19 @@ func (fc *FileClient) GetINodeForPath(path string) (INode, error) {
 
 	log.Printf("GetINodeForPath 6")
 	return inode, nil
+}
+
+func (fc *FileClient) GetINodeForPath(path string) (INode, error) {
+	return fc.FileService.GetINodeForPath(path)
+}
+
+func (fc *FileClient) Forget(req *ForgetReq) (*CloseResp, error) {
+	err := fc.FileService.Forget(req.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CloseResp{}, nil
 }
 
 func (fc *FileClient) ListDir(req *ListDirReq) (*ListDirResp, error) {

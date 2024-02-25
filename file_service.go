@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"path/filepath"
 )
 
 type FileService struct {
@@ -29,6 +30,36 @@ func (f *FileService) GetDiagnostics() *FileServiceDiagnostics {
 		INodes:                f.INodes.GetDiagnostics(),
 		TransferServiceStatus: transferServiceStatus,
 	}
+}
+
+func (f *FileService) Forget(path string) error {
+	oldINode, err := f.GetINodeForPath(path)
+	if err != nil {
+		return err
+	}
+
+	newINode, err := f.INodes.CloneINodeDir(oldINode)
+	if err != nil {
+		return err
+	}
+
+	if path == "" || path == "." {
+		// special case: We're updating the root directory
+		oldRoot := f.Root
+		f.Root = newINode
+		f.INodes.UpdateRefCount(oldRoot, -1)
+	} else {
+		// otherwise we need to update the parent dir
+		parentDir := filepath.Dir(path)
+		name := filepath.Base(path)
+		parentINode, err := f.GetINodeForPath(parentDir)
+		if err != nil {
+			return err
+		}
+		f.INodes.SetDirEntry(parentINode, name, newINode)
+	}
+
+	return nil
 }
 
 func NewFileService(Remote RemoteProvider, WorkDir string, BlockSize int) (*FileService, error) {
