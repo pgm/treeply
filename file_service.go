@@ -63,6 +63,28 @@ func (f *FileService) Forget(path string) error {
 	return nil
 }
 
+func pathConcat(base string, name string) string {
+	var result string
+	if name == "" {
+		result = base
+	} else if base == "" {
+		result = name
+	} else if base == "gs://" {
+		result = base + name
+	} else {
+		result = base + "/" + name
+	}
+
+	resultToCheck := strings.TrimPrefix(result, "gs://")
+
+	for _, component := range strings.Split(resultToCheck, "/") {
+		if component == "" || component == "." || component == ".." {
+			log.Panicf("Invalid result from pathConcat(%s, %s) => %s", base, name, result)
+		}
+	}
+	return result
+}
+
 func NewFileService(Remote RemoteProvider, WorkDir string, BlockSize int) (*FileService, error) {
 	inodes, err := NewINodes(WorkDir, int(BlockSize))
 	if err != nil {
@@ -117,19 +139,6 @@ func NewFileService(Remote RemoteProvider, WorkDir string, BlockSize int) (*File
 	var _requestDirEntries func(dirInode INode)
 
 	var makeRequestDirEntries func(dirPath string) func(dirInode INode)
-
-	pathConcat := func(base string, name string) string {
-		if name == "." || name == ".." {
-			panic("invalid name")
-		}
-		if name == "" {
-			return base
-		} else if base == "" {
-			return name
-		} else {
-			return base + "/" + name
-		}
-	}
 
 	makeRequestDirEntries = func(dirPath string) func(dirInode INode) {
 		_requestDirEntries = func(dirInode INode) {

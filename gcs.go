@@ -38,7 +38,7 @@ func parseGCSPath(path string) (string, string, error) {
 }
 
 func (g *GCSRemoteProvider) GetDirListing(ctx context.Context, path string) ([]RemoteFile, error) {
-	bucketName, key, err := parseGCSPath(g.root + path)
+	bucketName, key, err := parseGCSPath(pathConcat(g.root, path))
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +92,7 @@ func (g *GCSRemoteProvider) GetReader(ctx context.Context, path string, ETag str
 		panic("Could not convert etag to int")
 	}
 
-	bucketName, key, err := parseGCSPath(g.root + path)
+	bucketName, key, err := parseGCSPath(pathConcat(g.root, path))
 	if err != nil {
 		return nil, err
 	}

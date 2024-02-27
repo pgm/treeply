@@ -21,9 +21,6 @@ func start(remoteAddr string, socketAddr string) error {
 	var remote treeply.RemoteProvider
 	if strings.HasPrefix(remoteAddr, "gs://") {
 		ctx := context.Background()
-		if remoteAddr[len(remoteAddr)-1] != '/' {
-			remoteAddr = remoteAddr + "/"
-		}
 		remote = treeply.NewGCSRemoteProvider(ctx, remoteAddr)
 	} else {
 		remote = &treeply.DirRemoteProvider{Root: remoteAddr}
