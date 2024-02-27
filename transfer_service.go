@@ -38,7 +38,12 @@ type BlockCompletion struct {
 	Filename string
 }
 
-type InProgressState struct {
+type BlockError struct {
+	Block INodeBlock
+	Error error
+}
+
+type WaitingThreads struct {
 	Waiting []chan error
 }
 
@@ -55,13 +60,9 @@ type GetDirCompletion struct {
 	DirINode   INode
 }
 
-type DirProgressState struct {
-	Waiting []chan error
-}
-
 func TransferService(queue chan interface{}, INodes *INodes) {
-	blockRequests := make(map[INodeBlock]*InProgressState)
-	dirRequests := make(map[INode]*DirProgressState)
+	blockRequests := make(map[INodeBlock]*WaitingThreads)
+	dirRequests := make(map[INode]*WaitingThreads)
 
 	for _request := range queue {
 		switch request := _request.(type) {
@@ -69,6 +70,8 @@ func TransferService(queue chan interface{}, INodes *INodes) {
 			doBlockRequest(blockRequests, request, INodes, queue)
 		case *BlockCompletion:
 			doBlockCompletion(blockRequests, INodes, request)
+		case *BlockError:
+			doBlockError(blockRequests, INodes, request)
 		case *GetDirRequest:
 			doGetDir(dirRequests, INodes, request, queue)
 		case *GetDirCompletion:
@@ -82,7 +85,7 @@ func TransferService(queue chan interface{}, INodes *INodes) {
 	}
 }
 
-func doBlockRequest(blockState map[INodeBlock]*InProgressState, request *BlockRequest, inodes *INodes, mailbox chan interface{}) {
+func doBlockRequest(blockState map[INodeBlock]*WaitingThreads, request *BlockRequest, inodes *INodes, mailbox chan interface{}) {
 	log.Printf("Received block request: %d:%d", request.Block.INode, request.Block.BlockIndex)
 	state, ok := blockState[request.Block]
 	if ok {
@@ -102,21 +105,22 @@ func doBlockRequest(blockState map[INodeBlock]*InProgressState, request *BlockRe
 
 	ctx := context.Background()
 	// start a new transfer
-	blockState[request.Block] = &InProgressState{Waiting: []chan error{request.Response}}
+	blockState[request.Block] = &WaitingThreads{Waiting: []chan error{request.Response}}
 	log.Printf("starting transfer for %d:%d", request.Block.INode, request.Block.BlockIndex)
 	go startTransfer(ctx, mailbox, request.WorkDir, request.Block.INode, request.Block.BlockIndex,
 		inodes.blockSize, request.GetReader)
 }
 
-func doBlockCompletion(blockState map[INodeBlock]*InProgressState, inodes *INodes, completion *BlockCompletion) {
-	log.Printf("completed transfer for %d:%d", completion.Block.INode, completion.Block.BlockIndex)
+func doBlockError(blockState map[INodeBlock]*WaitingThreads, inodes *INodes, completion *BlockError) {
+	log.Printf("got error for block %d:%d: %s", completion.Block.INode, completion.Block.BlockIndex, completion.Error)
 
-	blockID := inodes.blocks.Allocate(completion.Filename)
-	log.Printf("mapping %s to block %d", completion.Filename, blockID)
-	inodes.SetBlock(completion.Block.INode, completion.Block.BlockIndex, blockID)
-	log.Printf("setblock called for %d:%d", completion.Block.INode, completion.Block.BlockIndex)
+	inodes.MarkUnreadable(completion.Block.INode, completion.Error)
 
-	state, ok := blockState[completion.Block]
+	wakeWaitingForBlock(blockState, completion.Block)
+}
+
+func wakeWaitingForBlock(blockState map[INodeBlock]*WaitingThreads, block INodeBlock) {
+	state, ok := blockState[block]
 	if ok {
 		log.Printf("waking %d threads", len(state.Waiting))
 		for _, waiting := range state.Waiting {
@@ -127,10 +131,22 @@ func doBlockCompletion(blockState map[INodeBlock]*InProgressState, inodes *INode
 	}
 }
 
+func doBlockCompletion(blockState map[INodeBlock]*WaitingThreads, inodes *INodes, completion *BlockCompletion) {
+	log.Printf("completed transfer for %d:%d", completion.Block.INode, completion.Block.BlockIndex)
+
+	blockID := inodes.blocks.Allocate(completion.Filename)
+	log.Printf("mapping %s to block %d", completion.Filename, blockID)
+	inodes.SetBlock(completion.Block.INode, completion.Block.BlockIndex, blockID)
+	log.Printf("setblock called for %d:%d", completion.Block.INode, completion.Block.BlockIndex)
+
+	wakeWaitingForBlock(blockState, completion.Block)
+}
+
 func startTransfer(ctx context.Context, completions chan interface{}, WorkDir string, inode INode, blockIndex int, BlockSize int64, GetReader func(context.Context) (io.Reader, error)) {
 	reader, err := GetReader(ctx) // Remote.GetReader(ctx, path, etag, int64(blockIndex)*BlockSize, BlockSize)
 	if err != nil {
 		log.Printf("Error in requestDirEntries: %s", err)
+		completions <- &BlockError{Block: INodeBlock{INode: inode, BlockIndex: blockIndex}, Error: err}
 		return
 	}
 	err = Transfer(ctx, inode, BlockSize, blockIndex, WorkDir, completions, reader, ReadChunkSize)
@@ -222,7 +238,7 @@ func Transfer(ctx context.Context, inode INode, blockSize int64, blockIndex int,
 	return finishCurrentFile()
 }
 
-func doGetDirCompletion(dirRequests map[INode]*DirProgressState, inodes *INodes, request *GetDirCompletion) {
+func doGetDirCompletion(dirRequests map[INode]*WaitingThreads, inodes *INodes, request *GetDirCompletion) {
 	inodes.SetDirEntries(request.DirINode, request.DirEntries)
 
 	// notify any waiting that the request has completed
@@ -238,7 +254,7 @@ func doGetDirCompletion(dirRequests map[INode]*DirProgressState, inodes *INodes,
 	delete(dirRequests, request.DirINode)
 }
 
-func doGetDir(dirRequests map[INode]*DirProgressState, inodes *INodes, request *GetDirRequest, mailbox chan interface{}) {
+func doGetDir(dirRequests map[INode]*WaitingThreads, inodes *INodes, request *GetDirRequest, mailbox chan interface{}) {
 
 	existing, ok := dirRequests[request.DirINode]
 	if ok {
@@ -255,7 +271,7 @@ func doGetDir(dirRequests map[INode]*DirProgressState, inodes *INodes, request *
 	}
 
 	// We must create a new request to get the dir contents
-	dirRequests[request.DirINode] = &DirProgressState{Waiting: []chan error{request.Response}}
+	dirRequests[request.DirINode] = &WaitingThreads{Waiting: []chan error{request.Response}}
 	ctx := context.Background()
 	go startGetDir(ctx, inodes, request, mailbox)
 
@@ -282,7 +298,7 @@ func startGetDir(ctx context.Context, inodes *INodes, request *GetDirRequest, ma
 	mailbox <- &GetDirCompletion{DirINode: request.DirINode, DirEntries: dirEntries}
 }
 
-func doDiagnosticRequest(blockState map[INodeBlock]*InProgressState, dirRequests map[INode]*DirProgressState, request *DiagnosticRequest) {
+func doDiagnosticRequest(blockState map[INodeBlock]*WaitingThreads, dirRequests map[INode]*WaitingThreads, request *DiagnosticRequest) {
 	ThreadsWaitingForBlocks := 0
 	for _, request := range blockState {
 		ThreadsWaitingForBlocks += len(request.Waiting)

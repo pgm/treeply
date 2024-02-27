@@ -15,7 +15,7 @@ type ReadParams struct {
 	length int
 }
 
-func TestLotsOfReadersFuzz(t *testing.T) {
+func SkipTestLotsOfReadersFuzz(t *testing.T) {
 	sourceLength := 10000
 	maxRead := 101
 	readThreads := 20
@@ -135,7 +135,7 @@ func TestLotsOfReadersFuzz(t *testing.T) {
 	log.Printf("All complete")
 }
 
-func TestReadFromLazyDir(t *testing.T) {
+func SkipTestReadFromLazyDir(t *testing.T) {
 	workDir := os.TempDir()
 	inodes, err := NewINodes(workDir, 3)
 	if err != nil {

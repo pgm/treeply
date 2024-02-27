@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"path/filepath"
+	"strings"
 )
 
 type FileService struct {
@@ -117,16 +118,38 @@ func NewFileService(Remote RemoteProvider, WorkDir string, BlockSize int) (*File
 
 	var makeRequestDirEntries func(dirPath string) func(dirInode INode)
 
+	pathConcat := func(base string, name string) string {
+		if name == "." || name == ".." {
+			panic("invalid name")
+		}
+		if name == "" {
+			return base
+		} else if base == "" {
+			return name
+		} else {
+			return base + "/" + name
+		}
+	}
+
 	makeRequestDirEntries = func(dirPath string) func(dirInode INode) {
 		_requestDirEntries = func(dirInode INode) {
 			Response := make(chan error)
 
 			transferServiceQueue <- &GetDirRequest{
-				GetDirListing:          func(ctx context.Context) ([]RemoteFile, error) { return Remote.GetDirListing(ctx, dirPath) },
-				DirINode:               dirInode,
-				MakeDirEntriesCallback: func(childName string) func(INode) { return makeRequestDirEntries(dirPath + "/" + childName) },
-				MakeFileCallback:       func(path string, etag string) RequestCallback { return makeRequestCallback(dirPath+"/"+path, etag) },
-				Response:               Response,
+				GetDirListing: func(ctx context.Context) ([]RemoteFile, error) {
+					if strings.HasPrefix(dirPath, "/") || strings.HasPrefix(dirPath, "./") || dirPath == "." {
+						panic("bad dirPath")
+					}
+					return Remote.GetDirListing(ctx, dirPath)
+				},
+				DirINode: dirInode,
+				MakeDirEntriesCallback: func(childName string) func(INode) {
+					return makeRequestDirEntries(pathConcat(dirPath, childName))
+				},
+				MakeFileCallback: func(path string, etag string) RequestCallback {
+					return makeRequestCallback(pathConcat(dirPath, path), etag)
+				},
+				Response: Response,
 			}
 
 			// wait for response before returning
@@ -136,7 +159,7 @@ func NewFileService(Remote RemoteProvider, WorkDir string, BlockSize int) (*File
 		return _requestDirEntries
 	}
 
-	fs.Root = fs.INodes.CreateLazyDir(UNALLOCATED_BLOCK_ID, &LazyDirectoryCallback{RequestDirEntries: makeRequestDirEntries(".")})
+	fs.Root = fs.INodes.CreateLazyDir(UNALLOCATED_BLOCK_ID, &LazyDirectoryCallback{RequestDirEntries: makeRequestDirEntries("")})
 
 	return fs, nil
 }

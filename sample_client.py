@@ -57,4 +57,4 @@ def main() :
         print("Response: "+json.dumps(json.loads(x), indent=2))
 
 if __name__ == "__main__":
-    fuzz()
+    main()

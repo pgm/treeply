@@ -105,19 +105,16 @@ func TestWithDirRemote(t *testing.T) {
 
 func checkReadMutatedFails(t *testing.T, fs *FileService, tmpDir string) {
 	log.Printf("checkpoint4")
+	// now mutate file, so the etag doesn't match what's expected
+	writeFile(tmpDir+"/f2", "xyz", 10)
+
+	// read from mutated file
 	buffer := make([]byte, 4)
-	f1INode, err := fs.GetINodeForPath("f1")
-	assert.Equal(t, nil, err)
-
+	f1INode, err := fs.GetINodeForPath("f2")
+	assert.Nil(t, err)
 	n, err := fs.INodes.ReadFile(f1INode, 0, buffer)
-	assert.Equal(t, nil, err)
-	assert.Equal(t, 4, n)
-
-	// now mutate that file
-	writeFile(tmpDir+"/f1", "xyz", 10)
-	n, err = fs.INodes.ReadFile(f1INode, 0, buffer)
-	assert.Equal(t, 0, n)
 	assert.Equal(t, FILE_CHANGED, err)
+	assert.Equal(t, 0, n)
 }
 
 func checkFileDisappeared(t *testing.T, fs *FileService, tmpDir string) {

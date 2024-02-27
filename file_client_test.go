@@ -38,6 +38,7 @@ func TestFileClientOperations(t *testing.T) {
 	// list an invalid file should fail
 	checkListDir(client, t)
 
+	checkOpen(client, t)
 	// opening a file should work
 	//	resp, err := client.Open(&OpenReq{})
 }
@@ -45,17 +46,17 @@ func TestFileClientOperations(t *testing.T) {
 func checkOpen(client *FileClient, t *testing.T) {
 	// opening a dir should fail
 	resp, err := client.Open(&OpenReq{Path: "d1"})
-	assert.Equal(t, nil, resp)
 	assert.Equal(t, IS_DIR, err)
+	assert.Nil(t, resp)
 
 	// opening a missing file should fail
 	resp, err = client.Open(&OpenReq{Path: "f3"})
-	assert.Equal(t, nil, resp)
 	assert.Equal(t, INVALID_NAME, err)
+	assert.Nil(t, resp)
 
 	// opening a file should be fine
 	resp, err = client.Open(&OpenReq{Path: "f1"})
-	assert.Equal(t, nil, err)
+	assert.Nil(t, err)
 	fd := resp.FD
 
 	// and now we can read

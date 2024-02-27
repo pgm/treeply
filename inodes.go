@@ -163,6 +163,18 @@ func (in *INodes) SetDirEntries(inode INode, dirEntries []DirEntry) {
 
 }
 
+func (in *INodes) MarkUnreadable(inode INode, failure error) {
+	in.lock.Lock()
+	defer in.lock.Unlock()
+
+	inodeState, ok := in.inodeStates[inode]
+	if !ok {
+		panic("no such inode")
+	}
+
+	inodeState.readFailed = failure
+}
+
 func (in *INodes) SetBlock(inode INode, index int, blockID BlockID) {
 	in.lock.Lock()
 	defer in.lock.Unlock()
@@ -181,7 +193,7 @@ func (in *INodes) SetBlock(inode INode, index int, blockID BlockID) {
 
 }
 
-func (in *INodes) GetBlockIDs(inode INode, startIndex int64, count int64) []BlockID {
+func (in *INodes) GetBlockIDs(inode INode, startIndex int64, count int64) ([]BlockID, error) {
 	fmt.Printf("count=%d\n", count)
 	result := make([]BlockID, count)
 	in.lock.Lock()
@@ -192,6 +204,10 @@ func (in *INodes) GetBlockIDs(inode INode, startIndex int64, count int64) []Bloc
 		panic("no such inode")
 	}
 
+	if inodeState.readFailed != nil {
+		return nil, inodeState.readFailed
+	}
+
 	for i := int64(0); i < count; i += 1 {
 		blockID := inodeState.blocks[startIndex+i]
 		result[i] = blockID
@@ -200,7 +216,7 @@ func (in *INodes) GetBlockIDs(inode INode, startIndex int64, count int64) []Bloc
 		}
 	}
 
-	return result
+	return result, nil
 }
 
 func (inodes *INodes) RequestMissingBlocks(inode INode, blockIndices []int) {
@@ -272,14 +288,22 @@ func (inodes *INodes) ReadDirWithErr(inode INode) ([]ExtendedDirEntry, error) {
 		return nil, IS_NOT_DIR
 	}
 
+	if inodeState.readFailed != nil {
+		return nil, inodeState.readFailed
+	}
+
 	// if we're a directory but not populated, use callback to request it be populated
 	if !inodeState.isDirPopulated && inodeState.lazyDirectoryCallback.RequestDirEntries != nil {
 		inodes.lock.Unlock()
 		inodeState.lazyDirectoryCallback.RequestDirEntries(inode)
 		inodes.lock.Lock()
-		if !inodeState.isDirPopulated {
+		if !inodeState.isDirPopulated && inodeState.readFailed == nil {
 			panic("requestCallback did not populate dir")
 		}
+	}
+
+	if inodeState.readFailed != nil {
+		return nil, inodeState.readFailed
 	}
 
 	result := inodeState.dirEntries.Get()
@@ -356,14 +380,16 @@ func (inodes *INodes) IsBlockPopulated(inode INode, blockIndex int) bool {
 // 	inodes.c
 // }
 
-// edge cases: ReadFile longer then file
 func (inodes *INodes) ReadFile(inode INode, offset int64, buffer []byte) (int, error) {
 	startIndex := offset / inodes.blockSize
 	startOffsetWithinBlock := offset % inodes.blockSize
 	endIndex := (offset + int64(len(buffer)) + inodes.blockSize - 1) / inodes.blockSize
 	blockCount := endIndex - startIndex
 
-	blockIDs := inodes.GetBlockIDs(inode, startIndex, blockCount)
+	blockIDs, err := inodes.GetBlockIDs(inode, startIndex, blockCount)
+	if err != nil {
+		return 0, err
+	}
 
 	// iterate through block IDs, checking to see if any blocks are unallocated
 	missingBlockIDs := make([]int, 0, len(blockIDs))
@@ -376,7 +402,10 @@ func (inodes *INodes) ReadFile(inode INode, offset int64, buffer []byte) (int, e
 	if len(missingBlockIDs) > 0 {
 		inodes.RequestMissingBlocks(inode, missingBlockIDs)
 		// after the above has completed, we should be able to get the final version of the block IDs
-		blockIDs = inodes.GetBlockIDs(inode, startIndex, blockCount)
+		blockIDs, err = inodes.GetBlockIDs(inode, startIndex, blockCount)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	defer (func() {

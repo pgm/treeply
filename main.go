@@ -34,6 +34,7 @@ type INodeState struct {
 	length                int64
 	isDir                 bool
 	isDirPopulated        bool
+	readFailed            error
 	blocks                []BlockID
 	dirEntries            *DirEntries
 	requestCallback       RequestCallback
